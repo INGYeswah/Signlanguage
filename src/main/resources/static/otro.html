@@ -1,0 +1,1365 @@
+<!--<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-Time Video Processing</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+</head>
+<body>
+    <div>Teachable Machine Image Model</div>
+    <button type="button" onclick="init()">Start</button>
+    <div id="webcam-container"></div>
+    <div id="label-container"></div>
+
+    <script type="text/javascript">
+        const URL = "https://teachablemachine.withgoogle.com/models/hpKmrJ9e4/";
+        const ENDPOINT_URL = "http://localhost:8080/otro.html/submit"; // Reemplaza con tu endpoint
+
+        let model, webcam, labelContainer, maxPredictions;
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            const flip = true;
+            webcam = new tmImage.Webcam(200, 200, flip);
+            await webcam.setup();
+            await webcam.play();
+            window.requestAnimationFrame(loop);
+
+            document.getElementById("webcam-container").appendChild(webcam.canvas);
+            labelContainer = document.getElementById("label-container");
+            for (let i = 0; i < maxPredictions; i++) {
+                labelContainer.appendChild(document.createElement("div"));
+            }
+        }
+
+        async function loop() {
+            webcam.update();
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            const prediction = await model.predict(webcam.canvas);
+
+            // Encuentra la predicción con la mayor probabilidad
+            const highestPrediction = prediction.reduce((prev, current) => (prev.probability > current.probability ? prev : current));
+
+            // Muestra la predicción con el mayor porcentaje en la consola
+            console.log(`Predicción con mayor porcentaje: ${highestPrediction.className}: ${highestPrediction.probability.toFixed(2)}`);
+
+            // Opcional: Actualiza el contenido del labelContainer con la predicción de mayor porcentaje
+            labelContainer.childNodes.forEach((node, i) => {
+                if (i === prediction.indexOf(highestPrediction)) {
+                    node.innerHTML = highestPrediction.className + ": " + highestPrediction.probability.toFixed(2);
+                } else {
+                    node.innerHTML = "";
+                }
+            });
+
+            // Envía la predicción con el mayor porcentaje a un endpoint
+            await sendPredictionToServer(highestPrediction);
+        }
+
+        async function sendPredictionToServer(prediction) {
+            try {
+                const response = await fetch('http://localhost:8080/api/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        className: prediction.className,
+                        probability: prediction.probability.toFixed(2)
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error en la solicitud: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                console.log('Respuesta del servidor:', result);
+            } catch (error) {
+                console.error('Error al enviar la predicción:', error);
+            }
+        }
+    </script>
+</body>
+</html>-->
+
+
+<!--<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera to Canvas with Skin Mask and Contour</title>
+    <style>
+        #canvas-container {
+            display: flex;
+            gap: 10px;
+        }
+        canvas {
+            border: 1px solid black;
+        }
+        #video {
+            display: none;
+        }
+        #original-canvas {
+            display: none; /* Ocultar el lienzo original */
+        }
+    </style>
+</head>
+<body>
+    <button type="button" id="start-camera-button">Start Camera</button>
+    <button type="button" id="download-button">Download Processed Images</button>
+    <div id="canvas-container">
+        <div>
+            <h3>Processed</h3>
+            <canvas id="processed-canvas"></canvas>
+        </div>
+    </div>
+    <div id="label-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <script>
+        const URL = "https://teachablemachine.withgoogle.com/models/X2aDeCSrU/";
+        const SERVER_URL = "http://localhost:8080/api/submit"; // Reemplaza con tu endpoint
+
+        let model, processedCanvas, processedContext, labelContainer, maxPredictions, video;
+        let downloadInterval;
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            processedCanvas = document.getElementById('processed-canvas');
+            processedContext = processedCanvas.getContext('2d');
+
+            video = document.createElement('video');
+            video.width = 640;
+            video.height = 480;
+            document.body.appendChild(video);
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+
+                video.onloadedmetadata = () => {
+                    video.play();
+                    drawCanvas();
+                };
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+            }
+        }
+
+        function drawCanvas() {
+            processedCanvas.width = video.videoWidth;
+            processedCanvas.height = video.videoHeight;
+
+            function processFrame() {
+                applySkinMask();
+                predict();
+                requestAnimationFrame(processFrame);
+            }
+
+            processFrame();
+        }
+
+        function applySkinMask() {
+            const frame = video;
+            const frameMask = document.createElement('canvas');
+            frameMask.width = processedCanvas.width;
+            frameMask.height = processedCanvas.height;
+            const maskContext = frameMask.getContext('2d');
+            maskContext.drawImage(frame, 0, 0, frameMask.width, frameMask.height);
+            const imageData = maskContext.getImageData(0, 0, frameMask.width, frameMask.height);
+            const frameData = new ImageData(new Uint8ClampedArray(imageData.data), frameMask.width, frameMask.height);
+
+            const centerX = processedCanvas.width / 2;
+            const centerY = processedCanvas.height / 2;
+            const radius = Math.min(processedCanvas.width, processedCanvas.height) / 2;
+            const minArea = 500;
+            const maxWhiteThreshold = 230;
+            const reflectThreshold = 200;
+
+            for (let i = 0; i < frameData.data.length; i += 4) {
+                const x = (i / 4) % processedCanvas.width;
+                const y = Math.floor((i / 4) / processedCanvas.width);
+
+                const r = frameData.data[i];
+                const g = frameData.data[i + 1];
+                const b = frameData.data[i + 2];
+
+                const isSkinTone = (
+                    (r >= 30 && r <= 150) &&
+                    (g >= 20 && g <= 130) &&
+                    (b >= 10 && b <= 120) &&
+                    Math.max(r, g, b) - Math.min(r, g, b) > 10
+                );
+
+                const distance = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+
+                const isWhite = r >= maxWhiteThreshold && g >= maxWhiteThreshold && b >= maxWhiteThreshold;
+                const isNotTooWhite = !isWhite;
+
+                const isReflection = (r + g + b) / 3 > reflectThreshold;
+
+                if (isSkinTone && distance <= radius && isNotTooWhite) {
+                    frameData.data[i] = 255;
+                    frameData.data[i + 1] = 255;
+                    frameData.data[i + 2] = 255;
+                } else if (isReflection) {
+                    frameData.data[i] = 0;
+                    frameData.data[i + 1] = 0;
+                    frameData.data[i + 2] = 0;
+                } else {
+                    frameData.data[i] = 0;
+                    frameData.data[i + 1] = 0;
+                    frameData.data[i + 2] = 0;
+                }
+                frameData.data[i + 3] = 255;
+            }
+
+            filterSmallContours(frameData.data, processedCanvas.width, processedCanvas.height, minArea);
+
+            processedContext.putImageData(frameData, 0, 0);
+        }
+
+        function filterSmallContours(imageData, width, height, minArea) {
+            const visited = new Uint8Array(width * height);
+            const labelMap = new Uint16Array(width * height);
+            let labelCount = 0;
+
+            function dfs(x, y, label) {
+                const stack = [[x, y]];
+                let area = 0;
+
+                while (stack.length > 0) {
+                    const [cx, cy] = stack.pop();
+                    if (cx < 0 || cx >= width || cy < 0 || cy >= height || visited[cy * width + cx]) continue;
+                    if (imageData[(cy * width + cx) * 4] !== 255) continue;
+
+                    visited[cy * width + cx] = 1;
+                    labelMap[cy * width + cx] = label;
+                    area++;
+
+                    stack.push([cx + 1, cy]);
+                    stack.push([cx - 1, cy]);
+                    stack.push([cx, cy + 1]);
+                    stack.push([cx, cy - 1]);
+                }
+
+                return area;
+            }
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    if (visited[y * width + x] === 0 && imageData[(y * width + x) * 4] === 255) {
+                        const area = dfs(x, y, ++labelCount);
+
+                        if (area < minArea) {
+                            for (let i = 0; i < width * height; i++) {
+                                if (labelMap[i] === labelCount) {
+                                    imageData[i * 4] = 0;
+                                    imageData[i * 4 + 1] = 0;
+                                    imageData[i * 4 + 2] = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        async function predict() {
+            const prediction = await model.predict(processedCanvas);
+            const highestPrediction = prediction.reduce((prev, curr) => (curr.probability > prev.probability ? curr : prev), prediction[0]);
+
+            // Muestra la predicción con el mayor porcentaje en la consola
+            console.log(`Predicción con mayor porcentaje: ${highestPrediction.className}: ${highestPrediction.probability.toFixed(2)}`);
+
+            // Opcional: Actualiza el contenido del labelContainer con la predicción de mayor porcentaje
+            if (!labelContainer) {
+                labelContainer = document.getElementById("label-container");
+                labelContainer.appendChild(document.createElement("div"));
+            }
+            labelContainer.childNodes[0].innerHTML = highestPrediction.className + ": " + highestPrediction.probability.toFixed(2);
+
+            // Envía la predicción con el mayor porcentaje a un endpoint
+            await sendPredictionToServer(highestPrediction);
+        }
+
+        async function sendPredictionToServer(prediction) {
+            try {
+                const response = await fetch(SERVER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        className: prediction.className,
+                        probability: prediction.probability.toFixed(2)
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error en la solicitud: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                console.log('Respuesta del servidor:', result);
+            } catch (error) {
+                console.error('Error al enviar la predicción:', error);
+            }
+        }
+
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = 'processed-image-' + Date.now() + '.png';
+            link.href = processedCanvas.toDataURL();
+            link.click();
+        }
+
+        function startDownloading() {
+            downloadInterval = setInterval(downloadImage, 1000); // Ajusta el intervalo según sea necesario
+        }
+
+        function stopDownloading() {
+            clearInterval(downloadInterval);
+        }
+
+        // Configura los escuchadores de eventos
+        document.getElementById('start-camera-button').addEventListener('click', () => {
+            init().then(startCamera);
+        });
+
+        document.getElementById('download-button').addEventListener('mousedown', startDownloading);
+        document.getElementById('download-button').addEventListener('mouseup', stopDownloading);
+        document.getElementById('download-button').addEventListener('mouseleave', stopDownloading); // Detén la descarga si el ratón sale del botón
+    </script>
+</body>
+</html>-->
+
+
+
+
+<!--<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera to Canvas with Blue and Black Mask and Contour</title>
+    <style>
+        #canvas-container {
+            display: flex;
+            gap: 10px;
+        }
+        canvas {
+            border: 1px solid black;
+        }
+        #video {
+            display: none;
+        }
+        #original-canvas {
+            display: none; /* Ocultar el lienzo original */
+        }
+    </style>
+</head>
+<body>
+    <button type="button" id="start-camera-button">Start Camera</button>
+    <button type="button" id="download-button">Download Processed Images</button>
+    <div id="canvas-container">
+        <div>
+            <h3>Processed</h3>
+            <canvas id="processed-canvas"></canvas>
+        </div>
+    </div>
+    <div id="label-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <script>
+        const URL = "https://teachablemachine.withgoogle.com/models/X2aDeCSrU/";
+        const SERVER_URL = "http://localhost:8080/api/submit"; // Reemplaza con tu endpoint
+
+        let model, processedCanvas, processedContext, labelContainer, maxPredictions, video;
+        let downloadInterval;
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            processedCanvas = document.getElementById('processed-canvas');
+            processedContext = processedCanvas.getContext('2d');
+
+            video = document.createElement('video');
+            video.width = 640;
+            video.height = 480;
+            document.body.appendChild(video);
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+
+                video.onloadedmetadata = () => {
+                    video.play();
+                    drawCanvas();
+                };
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+            }
+        }
+
+        function drawCanvas() {
+            processedCanvas.width = video.videoWidth;
+            processedCanvas.height = video.videoHeight;
+
+            function processFrame() {
+                applyColorMask();
+                predict();
+                requestAnimationFrame(processFrame);
+            }
+
+            processFrame();
+        }
+
+        function applyColorMask() {
+            const frame = video;
+            const frameMask = document.createElement('canvas');
+            frameMask.width = processedCanvas.width;
+            frameMask.height = processedCanvas.height;
+            const maskContext = frameMask.getContext('2d');
+            maskContext.drawImage(frame, 0, 0, frameMask.width, frameMask.height);
+            const imageData = maskContext.getImageData(0, 0, frameMask.width, frameMask.height);
+            const frameData = new ImageData(new Uint8ClampedArray(imageData.data), frameMask.width, frameMask.height);
+
+            const centerX = processedCanvas.width / 2;
+            const centerY = processedCanvas.height / 2;
+            const radius = Math.min(processedCanvas.width, processedCanvas.height) / 2;
+            const minArea = 500;
+            const maxWhiteThreshold = 230; // Ajusta este umbral si es necesario
+
+            for (let i = 0; i < frameData.data.length; i += 4) {
+                const x = (i / 4) % processedCanvas.width;
+                const y = Math.floor((i / 4) / processedCanvas.width);
+
+                const r = frameData.data[i];
+                const g = frameData.data[i + 1];
+                const b = frameData.data[i + 2];
+
+                // Ampliar el rango para detectar todos los tonos de azul, incluyendo azules más oscuros
+                const isBlue = (b > 50 && r < 100 && g < 100);
+                const isBlack = (r < 80 && g < 80 && b < 80); // Ampliar el rango para negro
+
+                const distance = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+
+                const isWhite = r >= maxWhiteThreshold && g >= maxWhiteThreshold && b >= maxWhiteThreshold;
+                const isNotTooWhite = !isWhite;
+
+                if ((isBlue || isBlack) && distance <= radius && isNotTooWhite) {
+                    frameData.data[i] = 255;
+                    frameData.data[i + 1] = 255;
+                    frameData.data[i + 2] = 255;
+                } else {
+                    frameData.data[i] = 0;
+                    frameData.data[i + 1] = 0;
+                    frameData.data[i + 2] = 0;
+                }
+                frameData.data[i + 3] = 255;
+            }
+
+            filterSmallContours(frameData.data, processedCanvas.width, processedCanvas.height, minArea);
+
+            processedContext.putImageData(frameData, 0, 0);
+        }
+
+        function filterSmallContours(imageData, width, height, minArea) {
+            const visited = new Uint8Array(width * height);
+            const labelMap = new Uint16Array(width * height);
+            let labelCount = 0;
+
+            function dfs(x, y, label) {
+                const stack = [[x, y]];
+                let area = 0;
+
+                while (stack.length > 0) {
+                    const [cx, cy] = stack.pop();
+                    if (cx < 0 || cx >= width || cy < 0 || cy >= height || visited[cy * width + cx]) continue;
+                    if (imageData[(cy * width + cx) * 4] !== 255) continue;
+
+                    visited[cy * width + cx] = 1;
+                    labelMap[cy * width + cx] = label;
+                    area++;
+
+                    stack.push([cx + 1, cy]);
+                    stack.push([cx - 1, cy]);
+                    stack.push([cx, cy + 1]);
+                    stack.push([cx, cy - 1]);
+                }
+
+                return area;
+            }
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    if (visited[y * width + x] === 0 && imageData[(y * width + x) * 4] === 255) {
+                        const area = dfs(x, y, ++labelCount);
+
+                        if (area < minArea) {
+                            for (let i = 0; i < width * height; i++) {
+                                if (labelMap[i] === labelCount) {
+                                    imageData[i * 4] = 0;
+                                    imageData[i * 4 + 1] = 0;
+                                    imageData[i * 4 + 2] = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        async function predict() {
+            const prediction = await model.predict(processedCanvas);
+            const highestPrediction = prediction.reduce((prev, curr) => (curr.probability > prev.probability ? curr : prev), prediction[0]);
+
+            // Muestra la predicción con el mayor porcentaje en la consola
+            console.log(`Predicción con mayor porcentaje: ${highestPrediction.className}: ${highestPrediction.probability.toFixed(2)}`);
+
+            // Opcional: Actualiza el contenido del labelContainer con la predicción de mayor porcentaje
+            if (!labelContainer) {
+                labelContainer = document.getElementById("label-container");
+                labelContainer.appendChild(document.createElement("div"));
+            }
+            labelContainer.childNodes[0].innerHTML = highestPrediction.className + ": " + highestPrediction.probability.toFixed(2);
+
+            // Envía la predicción con el mayor porcentaje a un endpoint
+            await sendPredictionToServer(highestPrediction);
+        }
+
+        async function sendPredictionToServer(prediction) {
+            try {
+                const response = await fetch(SERVER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        className: prediction.className,
+                        probability: prediction.probability.toFixed(2)
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error en la solicitud: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                console.log('Respuesta del servidor:', result);
+            } catch (error) {
+                console.error('Error al enviar la predicción:', error);
+            }
+        }
+
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = 'processed-image-' + Date.now() + '.png';
+            link.href = processedCanvas.toDataURL();
+            link.click();
+        }
+
+        function startDownloading() {
+            downloadInterval = setInterval(downloadImage, 1000); // Ajusta el intervalo según sea necesario
+        }
+
+        function stopDownloading() {
+            clearInterval(downloadInterval);
+        }
+
+        // Configura los escuchadores de eventos
+        document.getElementById('start-camera-button').addEventListener('click', () => {
+            init().then(startCamera);
+        });
+
+        document.getElementById('download-button').addEventListener('mousedown', startDownloading);
+        document.getElementById('download-button').addEventListener('mouseup', stopDownloading);
+        document.getElementById('download-button').addEventListener('mouseleave', stopDownloading); // Detén la descarga si el ratón sale del botón
+    </script>
+</body>
+</html>-->
+
+
+
+
+<!--<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera to Canvas with Black Mask and Contour</title>
+    <style>
+        #canvas-container {
+            display: flex;
+            gap: 10px;
+        }
+        canvas {
+            border: 1px solid black;
+        }
+        #video {
+            display: none;
+        }
+        #original-canvas {
+            display: none; /* Ocultar el lienzo original */
+        }
+    </style>
+</head>
+<body>
+    <button type="button" id="start-camera-button">Start Camera</button>
+    <button type="button" id="download-button">Download Processed Images</button>
+    <div id="canvas-container">
+        <div>
+            <h3>Processed</h3>
+            <canvas id="processed-canvas"></canvas>
+        </div>
+    </div>
+    <div id="label-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <script>
+        const URL = "https://teachablemachine.withgoogle.com/models/X2aDeCSrU/";
+        const SERVER_URL = "http://localhost:8080/api/submit"; // Reemplaza con tu endpoint
+
+        let model, processedCanvas, processedContext, labelContainer, maxPredictions, video;
+        let downloadInterval;
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            processedCanvas = document.getElementById('processed-canvas');
+            processedContext = processedCanvas.getContext('2d');
+
+            video = document.createElement('video');
+            video.width = 640;
+            video.height = 480;
+            document.body.appendChild(video);
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+
+                video.onloadedmetadata = () => {
+                    video.play();
+                    drawCanvas();
+                };
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+            }
+        }
+
+        function drawCanvas() {
+            processedCanvas.width = video.videoWidth;
+            processedCanvas.height = video.videoHeight;
+
+            function processFrame() {
+                applyColorMask();
+                predict();
+                requestAnimationFrame(processFrame);
+            }
+
+            processFrame();
+        }
+
+        function applyColorMask() {
+            const frame = video;
+            const frameMask = document.createElement('canvas');
+            frameMask.width = processedCanvas.width;
+            frameMask.height = processedCanvas.height;
+            const maskContext = frameMask.getContext('2d');
+            maskContext.drawImage(frame, 0, 0, frameMask.width, frameMask.height);
+            const imageData = maskContext.getImageData(0, 0, frameMask.width, frameMask.height);
+            const frameData = new ImageData(new Uint8ClampedArray(imageData.data), frameMask.width, frameMask.height);
+
+            const centerX = processedCanvas.width / 2;
+            const centerY = processedCanvas.height / 2;
+            const radius = Math.min(processedCanvas.width, processedCanvas.height) / 2;
+            const minArea = 500;
+
+            for (let i = 0; i < frameData.data.length; i += 4) {
+                const x = (i / 4) % processedCanvas.width;
+                const y = Math.floor((i / 4) / processedCanvas.width);
+
+                const r = frameData.data[i];
+                const g = frameData.data[i + 1];
+                const b = frameData.data[i + 2];
+
+                // Solo detecta el negro
+                const isBlack = (r < 50 && g < 50 && b < 50);
+
+                const distance = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+
+                if (isBlack && distance <= radius) {
+                    frameData.data[i] = 255;
+                    frameData.data[i + 1] = 255;
+                    frameData.data[i + 2] = 255;
+                } else {
+                    frameData.data[i] = 0;
+                    frameData.data[i + 1] = 0;
+                    frameData.data[i + 2] = 0;
+                }
+                frameData.data[i + 3] = 255;
+            }
+
+            filterSmallContours(frameData.data, processedCanvas.width, processedCanvas.height, minArea);
+
+            processedContext.putImageData(frameData, 0, 0);
+        }
+
+        function filterSmallContours(imageData, width, height, minArea) {
+            const visited = new Uint8Array(width * height);
+            const labelMap = new Uint16Array(width * height);
+            let labelCount = 0;
+
+            function dfs(x, y, label) {
+                const stack = [[x, y]];
+                let area = 0;
+
+                while (stack.length > 0) {
+                    const [cx, cy] = stack.pop();
+                    if (cx < 0 || cx >= width || cy < 0 || cy >= height || visited[cy * width + cx]) continue;
+                    if (imageData[(cy * width + cx) * 4] !== 255) continue;
+
+                    visited[cy * width + cx] = 1;
+                    labelMap[cy * width + cx] = label;
+                    area++;
+
+                    stack.push([cx + 1, cy]);
+                    stack.push([cx - 1, cy]);
+                    stack.push([cx, cy + 1]);
+                    stack.push([cx, cy - 1]);
+                }
+
+                return area;
+            }
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    if (visited[y * width + x] === 0 && imageData[(y * width + x) * 4] === 255) {
+                        const area = dfs(x, y, ++labelCount);
+
+                        if (area < minArea) {
+                            for (let i = 0; i < width * height; i++) {
+                                if (labelMap[i] === labelCount) {
+                                    imageData[i * 4] = 0;
+                                    imageData[i * 4 + 1] = 0;
+                                    imageData[i * 4 + 2] = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        async function predict() {
+            const prediction = await model.predict(processedCanvas);
+            const highestPrediction = prediction.reduce((prev, curr) => (curr.probability > prev.probability ? curr : prev), prediction[0]);
+
+            // Muestra la predicción con el mayor porcentaje en la consola
+            console.log(`Predicción con mayor porcentaje: ${highestPrediction.className}: ${highestPrediction.probability.toFixed(2)}`);
+
+            // Opcional: Actualiza el contenido del labelContainer con la predicción de mayor porcentaje
+            if (!labelContainer) {
+                labelContainer = document.getElementById("label-container");
+                labelContainer.appendChild(document.createElement("div"));
+            }
+            labelContainer.childNodes[0].innerHTML = highestPrediction.className + ": " + highestPrediction.probability.toFixed(2);
+
+            // Envía la predicción con el mayor porcentaje a un endpoint
+            await sendPredictionToServer(highestPrediction);
+        }
+
+        async function sendPredictionToServer(prediction) {
+            try {
+                const response = await fetch(SERVER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        className: prediction.className,
+                        probability: prediction.probability.toFixed(2)
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error en la solicitud: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                console.log('Respuesta del servidor:', result);
+            } catch (error) {
+                console.error('Error al enviar la predicción:', error);
+            }
+        }
+
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = 'processed-image-' + Date.now() + '.png';
+            link.href = processedCanvas.toDataURL();
+            link.click();
+        }
+
+        function startDownloading() {
+            downloadInterval = setInterval(downloadImage, 1000); // Ajusta el intervalo según sea necesario
+        }
+
+        function stopDownloading() {
+            clearInterval(downloadInterval);
+        }
+
+        // Configura los escuchadores de eventos
+        document.getElementById('start-camera-button').addEventListener('click', () => {
+            init().then(startCamera);
+        });
+
+        document.getElementById('download-button').addEventListener('mousedown', startDownloading);
+        document.getElementById('download-button').addEventListener('mouseup', stopDownloading);
+        document.getElementById('download-button').addEventListener('mouseleave', stopDownloading); // Detén la descarga si se sale del botón
+    </script>
+</body>
+</html>
+-->
+
+
+
+<!--<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Camera to Canvas with Black Mask and Contour</title>
+        <style>
+            #canvas-container {
+                display: flex;
+                gap: 10px;
+            }
+            canvas {
+                border: 1px solid black;
+            }
+            #video {
+                display: none;
+            }
+            #original-canvas {
+                display: none; /* Ocultar el lienzo original */
+            }
+        </style>
+    </head>
+    <body>
+        <button type="button" id="start-camera-button">Start Camera</button>
+        <button type="button" id="download-button">Download Processed Images</button>
+        <div id="canvas-container">
+            <div>
+                <h3>Processed</h3>
+                <canvas id="processed-canvas"></canvas>
+            </div>
+        </div>
+        <div id="label-container"></div>
+
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+        <script>
+            const URL = "https://teachablemachine.withgoogle.com/models/X2aDeCSrU/";
+            const SERVER_URL = "http://localhost:8080/api/submit"; // Reemplaza con tu endpoint
+
+            let model, processedCanvas, processedContext, labelContainer, maxPredictions, video;
+            let downloadInterval;
+
+            async function init() {
+                const modelURL = URL + "model.json";
+                const metadataURL = URL + "metadata.json";
+
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+
+                processedCanvas = document.getElementById('processed-canvas');
+                processedContext = processedCanvas.getContext('2d');
+
+                video = document.createElement('video');
+                video.width = 640;
+                video.height = 480;
+                document.body.appendChild(video);
+            }
+
+            async function startCamera() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({video: true});
+                    video.srcObject = stream;
+
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        drawCanvas();
+                    };
+                } catch (error) {
+                    console.error('Error accessing camera:', error);
+                }
+            }
+
+            function drawCanvas() {
+                processedCanvas.width = video.videoWidth;
+                processedCanvas.height = video.videoHeight;
+
+                function processFrame() {
+                    applyColorMask();
+                    predict();
+                    requestAnimationFrame(processFrame);
+                }
+
+                processFrame();
+            }
+
+            function applyColorMask() {
+                const frame = video;
+                const frameMask = document.createElement('canvas');
+                frameMask.width = processedCanvas.width;
+                frameMask.height = processedCanvas.height;
+                const maskContext = frameMask.getContext('2d');
+                maskContext.drawImage(frame, 0, 0, frameMask.width, frameMask.height);
+                const imageData = maskContext.getImageData(0, 0, frameMask.width, frameMask.height);
+                const frameData = new ImageData(new Uint8ClampedArray(imageData.data), frameMask.width, frameMask.height);
+
+                const centerX = processedCanvas.width / 2;
+                const centerY = processedCanvas.height / 2;
+                const radius = Math.min(processedCanvas.width, processedCanvas.height) / 2;
+                const minArea = 500;
+
+                // Ajusta el rango para detectar colores oscuros, incluyendo negro iluminado
+                const blackThreshold = 80; // Umbral ajustado para colores oscuros
+                for (let i = 0; i < frameData.data.length; i += 4) {
+                    const x = (i / 4) % processedCanvas.width;
+                    const y = Math.floor((i / 4) / processedCanvas.width);
+
+                    const r = frameData.data[i];
+                    const g = frameData.data[i + 1];
+                    const b = frameData.data[i + 2];
+
+                    // Detecta negro y tonos oscuros
+                    const isDark = (r < blackThreshold && g < blackThreshold && b < blackThreshold);
+
+                    const distance = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+
+                    if (isDark && distance <= radius) {
+                        frameData.data[i] = 255;
+                        frameData.data[i + 1] = 255;
+                        frameData.data[i + 2] = 255;
+                    } else {
+                        frameData.data[i] = 0;
+                        frameData.data[i + 1] = 0;
+                        frameData.data[i + 2] = 0;
+                    }
+                    frameData.data[i + 3] = 255;
+                }
+
+                filterSmallContours(frameData.data, processedCanvas.width, processedCanvas.height, minArea);
+
+                processedContext.putImageData(frameData, 0, 0);
+            }
+
+            function filterSmallContours(imageData, width, height, minArea) {
+                const visited = new Uint8Array(width * height);
+                const labelMap = new Uint16Array(width * height);
+                let labelCount = 0;
+
+                function dfs(x, y, label) {
+                    const stack = [[x, y]];
+                    let area = 0;
+
+                    while (stack.length > 0) {
+                        const [cx, cy] = stack.pop();
+                        if (cx < 0 || cx >= width || cy < 0 || cy >= height || visited[cy * width + cx])
+                            continue;
+                        if (imageData[(cy * width + cx) * 4] !== 255)
+                            continue;
+
+                        visited[cy * width + cx] = 1;
+                        labelMap[cy * width + cx] = label;
+                        area++;
+
+                        stack.push([cx + 1, cy]);
+                        stack.push([cx - 1, cy]);
+                        stack.push([cx, cy + 1]);
+                        stack.push([cx, cy - 1]);
+                    }
+
+                    return area;
+                }
+
+                for (let y = 0; y < height; y++) {
+                    for (let x = 0; x < width; x++) {
+                        if (visited[y * width + x] === 0 && imageData[(y * width + x) * 4] === 255) {
+                            const area = dfs(x, y, ++labelCount);
+
+                            if (area < minArea) {
+                                for (let i = 0; i < width * height; i++) {
+                                    if (labelMap[i] === labelCount) {
+                                        imageData[i * 4] = 0;
+                                        imageData[i * 4 + 1] = 0;
+                                        imageData[i * 4 + 2] = 0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            async function predict() {
+                const prediction = await model.predict(processedCanvas);
+                const highestPrediction = prediction.reduce((prev, curr) => (curr.probability > prev.probability ? curr : prev), prediction[0]);
+
+                // Muestra la predicción con el mayor porcentaje en la consola
+                console.log(`Predicción con mayor porcentaje: ${highestPrediction.className}: ${highestPrediction.probability.toFixed(2)}`);
+
+                // Opcional: Actualiza el contenido del labelContainer con la predicción de mayor porcentaje
+                if (!labelContainer) {
+                    labelContainer = document.getElementById("label-container");
+                    labelContainer.appendChild(document.createElement("div"));
+                }
+                labelContainer.childNodes[0].innerHTML = highestPrediction.className + ": " + highestPrediction.probability.toFixed(2);
+
+                // Envía la predicción con el mayor porcentaje a un endpoint
+                await sendPredictionToServer(highestPrediction);
+            }
+
+            async function sendPredictionToServer(prediction) {
+                try {
+                    const response = await fetch(SERVER_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            className: prediction.className,
+                            probability: prediction.probability.toFixed(2)
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Error en la solicitud: ${response.statusText}`);
+                    }
+
+                    const result = await response.json();
+                    console.log('Respuesta del servidor:', result);
+                } catch (error) {
+                    console.error('Error al enviar la predicción:', error);
+                }
+            }
+
+            function downloadImage() {
+                const link = document.createElement('a');
+                link.download = 'processed-image-' + Date.now() + '.png';
+                link.href = processedCanvas.toDataURL();
+                link.click();
+            }
+
+            function startDownloading() {
+                downloadInterval = setInterval(downloadImage, 1000); // Ajusta el intervalo según sea necesario
+            }
+
+            function stopDownloading() {
+                clearInterval(downloadInterval);
+            }
+
+            // Configura los escuchadores de eventos
+            document.getElementById('start-camera-button').addEventListener('click', () => {
+                init().then(startCamera);
+            });
+
+            document.getElementById('download-button').addEventListener('mousedown', startDownloading);
+            document.getElementById('download-button').addEventListener('mouseup', stopDownloading);
+            document.getElementById('download-button').addEventListener('mouseleave', stopDownloading); // Detén la descarga si el ratón sale del botón
+        </script>
+    </body>
+</html>-->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera to Canvas with Black Mask and Contour</title>
+    <style>
+        #canvas-container {
+            display: flex;
+            gap: 10px;
+        }
+        canvas {
+            border: 1px solid black;
+        }
+        #video {
+            display: none;
+        }
+        #original-canvas {
+            display: none; /* Ocultar el lienzo original */
+        }
+    </style>
+</head>
+<body>
+    <button type="button" id="start-camera-button">Start Camera</button>
+    <button type="button" id="download-button">Download Processed Images</button>
+    <div id="canvas-container">
+        <div>
+            <h3>Processed</h3>
+            <canvas id="processed-canvas"></canvas>
+        </div>
+    </div>
+    <div id="label-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <script>
+        const URL = "https://teachablemachine.withgoogle.com/models/oJY4Zce26/";
+        const SERVER_URL = "http://localhost:8080/api/submit"; // Reemplaza con tu endpoint
+
+        let model, processedCanvas, processedContext, labelContainer, maxPredictions, video;
+        let downloadInterval;
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            processedCanvas = document.getElementById('processed-canvas');
+            processedContext = processedCanvas.getContext('2d');
+
+            video = document.createElement('video');
+            video.width = 640;
+            video.height = 480;
+            document.body.appendChild(video);
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({video: true});
+                video.srcObject = stream;
+
+                video.onloadedmetadata = () => {
+                    video.play();
+                    drawCanvas();
+                };
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+            }
+        }
+
+        function drawCanvas() {
+            processedCanvas.width = video.videoWidth;
+            processedCanvas.height = video.videoHeight;
+
+            function processFrame() {
+                applyColorMask();
+                predict();
+                requestAnimationFrame(processFrame);
+            }
+
+            processFrame();
+        }
+
+        function applyColorMask() {
+            const frame = video;
+            const frameMask = document.createElement('canvas');
+            frameMask.width = processedCanvas.width;
+            frameMask.height = processedCanvas.height;
+            const maskContext = frameMask.getContext('2d');
+            maskContext.drawImage(frame, 0, 0, frameMask.width, frameMask.height);
+            const imageData = maskContext.getImageData(0, 0, frameMask.width, frameMask.height);
+            const frameData = new ImageData(new Uint8ClampedArray(imageData.data), frameMask.width, frameMask.height);
+
+            const centerX = processedCanvas.width / 2;
+            const centerY = processedCanvas.height / 2;
+            const radius = Math.min(processedCanvas.width, processedCanvas.height) / 2;
+            const minArea = 500;
+
+            // Ajusta el rango para detectar colores oscuros, incluyendo negro iluminado
+            const blackThreshold = 80; // Umbral ajustado para colores oscuros
+            for (let i = 0; i < frameData.data.length; i += 4) {
+                const x = (i / 4) % processedCanvas.width;
+                const y = Math.floor((i / 4) / processedCanvas.width);
+
+                const r = frameData.data[i];
+                const g = frameData.data[i + 1];
+                const b = frameData.data[i + 2];
+
+                // Detecta negro y tonos oscuros
+                const isDark = (r < blackThreshold && g < blackThreshold && b < blackThreshold);
+
+                const distance = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+
+                if (isDark && distance <= radius) {
+                    frameData.data[i] = 255;
+                    frameData.data[i + 1] = 255;
+                    frameData.data[i + 2] = 255;
+                } else {
+                    frameData.data[i] = 0;
+                    frameData.data[i + 1] = 0;
+                    frameData.data[i + 2] = 0;
+                }
+                frameData.data[i + 3] = 255;
+            }
+
+            filterSmallContours(frameData.data, processedCanvas.width, processedCanvas.height, minArea);
+
+            processedContext.putImageData(frameData, 0, 0);
+        }
+
+        function filterSmallContours(imageData, width, height, minArea) {
+            const visited = new Uint8Array(width * height);
+            const labelMap = new Uint16Array(width * height);
+            let labelCount = 0;
+
+            function dfs(x, y, label) {
+                const stack = [[x, y]];
+                let area = 0;
+
+                while (stack.length > 0) {
+                    const [cx, cy] = stack.pop();
+                    if (cx < 0 || cx >= width || cy < 0 || cy >= height || visited[cy * width + cx])
+                        continue;
+                    if (imageData[(cy * width + cx) * 4] !== 255)
+                        continue;
+
+                    visited[cy * width + cx] = 1;
+                    labelMap[cy * width + cx] = label;
+                    area++;
+
+                    stack.push([cx + 1, cy]);
+                    stack.push([cx - 1, cy]);
+                    stack.push([cx, cy + 1]);
+                    stack.push([cx, cy - 1]);
+                }
+
+                return area;
+            }
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    if (visited[y * width + x] === 0 && imageData[(y * width + x) * 4] === 255) {
+                        const area = dfs(x, y, ++labelCount);
+
+                        if (area < minArea) {
+                            for (let i = 0; i < width * height; i++) {
+                                if (labelMap[i] === labelCount) {
+                                    imageData[i * 4] = 0;
+                                    imageData[i * 4 + 1] = 0;
+                                    imageData[i * 4 + 2] = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        async function predict() {
+            const prediction = await model.predict(processedCanvas);
+            const highestPrediction = prediction.reduce((prev, curr) => (curr.probability > prev.probability ? curr : prev), prediction[0]);
+
+            // Muestra la predicción con el mayor porcentaje en la consola
+            console.log(`Predicción con mayor porcentaje: ${highestPrediction.className}: ${highestPrediction.probability.toFixed(2)}`);
+
+            // Opcional: Actualiza el contenido del labelContainer con la predicción de mayor porcentaje
+            if (!labelContainer) {
+                labelContainer = document.getElementById("label-container");
+                labelContainer.appendChild(document.createElement("div"));
+            }
+            labelContainer.childNodes[0].innerHTML = highestPrediction.className + ": " + highestPrediction.probability.toFixed(2);
+
+            // Envía la predicción con el mayor porcentaje a un endpoint
+            await sendPredictionToServer(highestPrediction);
+        }
+
+        async function sendPredictionToServer(prediction) {
+            try {
+                const response = await fetch(SERVER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        className: prediction.className,
+                        probability: prediction.probability.toFixed(2)
+                    })
+                });
+
+                // Leer la respuesta como texto para depuración
+                const responseText = await response.text();
+                console.log('Respuesta cruda del servidor:', responseText);
+
+                // Intentar parsear el texto como JSON
+                let result;
+                try {
+                    result = JSON.parse(responseText);
+                } catch (e) {
+                    throw new Error(`Respuesta no es JSON: ${responseText}`);
+                }
+
+                console.log('Respuesta del servidor:', result);
+            } catch (error) {
+                console.error('Error al enviar la predicción:', error);
+            }
+        }
+
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = 'processed-image-' + Date.now() + '.png';
+            link.href = processedCanvas.toDataURL();
+            link.click();
+        }
+
+        function startDownloading() {
+            downloadInterval = setInterval(downloadImage, 100); // Ajusta el intervalo según sea necesario
+        }
+
+        function stopDownloading() {
+            clearInterval(downloadInterval);
+        }
+
+        // Configura los escuchadores de eventos
+        document.getElementById('start-camera-button').addEventListener('click', () => {
+            init().then(startCamera);
+        });
+
+        document.getElementById('download-button').addEventListener('mousedown', startDownloading);
+        document.getElementById('download-button').addEventListener('mouseup', stopDownloading);
+        document.getElementById('download-button').addEventListener('mouseleave', stopDownloading); // Detén la descarga si el ratón sale del botón
+    </script>
+</body>
+</html>
+
